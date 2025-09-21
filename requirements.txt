@@ -1,0 +1,6 @@
+# Núcleo do projeto
+opencv-python
+opencv-contrib-python
+mediapipe
+numpy
+Pillow
