@@ -52,6 +52,41 @@ ALERTABET/
 
 ---
 
+### 🔗 Integração do reconhecimento facial com o restante da aplicação
+
+O módulo de reconhecimento facial é a base da aplicação e está diretamente conectado ao restante do sistema por meio de uma arquitetura de eventos e comunicação via API local (FastAPI):
+
+Captura facial (main.py):
+O sistema usa o MediaPipe FaceMesh e o Haar Cascade para detectar o rosto e extrair os landmarks dos olhos.
+
+Análise de fadiga (risk_model.py):
+As informações de piscadas e tempo contínuo são enviadas ao modelo de risco, que calcula o nível de atenção do usuário.
+
+Comunicação com API (integration.py):
+O main.py envia dados atualizados para o endpoint /status, contendo:
+
+{
+  "have_face": true,
+  "faces": 1,
+  "ear": 0.21,
+  "blink_rate": 18.2,
+  "blink_count": 54,
+  "minutes_on": 7.5,
+  "risky": false
+}
+
+
+Visualização (index.html):
+O painel web consome esses dados via JavaScript (fetch('/status')) e atualiza automaticamente todos os KPIs, incluindo piscadas por minuto, total de piscos, e status de risco.
+
+Eventos registrados:
+Sempre que o sistema entra em risco, é feito um POST para /events, registrando o alerta no histórico e no gráfico de alertas de 24h.
+
+Assim, o fluxo completo é:
+📷 Reconhecimento facial → Análise de risco → API local → Dashboard web
+
+---
+
 ## ▶️ Como executar
 
 1. Crie e ative um ambiente virtual:
