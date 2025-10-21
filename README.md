@@ -1,13 +1,24 @@
-# 🎰 Alerta Bet BR 🚨
+# 🎰 Alerta Bet BR 🚨   
 
-Aplicação local em **Python + OpenCV + MediaPipe** para detecção de rosto e monitoramento de fadiga.  
-Criada como parte de um desafio prático, o objetivo é identificar **comportamentos de risco em apostas online** e incentivar o usuário a **fazer pausas**.
+# Sistema integrado de reconhecimento facial e monitoramento de fadiga em tempo real
+
+Aplicação local desenvolvida em Python + OpenCV + MediaPipe + FastAPI, com dashboard web interativo para visualização de dados e alertas.
+Criada como parte do projeto prático da disciplina de IoT & IOB (FIAP), a solução tem como objetivo detectar comportamentos de risco em apostas online e incentivar pausas conscientes durante o uso prolongado.
 
 ---
 
 ## 🎯 Objetivo
-Muitos usuários em ambientes de apostas perdem a noção do tempo e apresentam sinais de fadiga ocular.  
-Este projeto detecta o rosto em tempo real, mede piscadas, monitora o tempo ativo e emite **alertas visuais e sonoros** quando o uso ultrapassa limites configuráveis.
+
+Muitos usuários que participam de ambientes de apostas online passam longos períodos focados em tela, apresentando sinais de fadiga ocular e redução da atenção.
+O Alerta Bet BR atua como uma ferramenta de prevenção comportamental, monitorando o rosto do usuário e o tempo contínuo de atividade.
+
+Quando são detectados sinais de risco — como baixa frequência de piscadas ou tempo excessivo em frente à tela — o sistema:
+
+Exibe um alerta visual pulsante (“RISCO — PAUSA AGORA”);
+
+Emite um alerta sonoro (no Windows);
+
+Registra o evento no painel web, atualizando o gráfico e o histórico de alertas das últimas 24h.
 
 ---
 
@@ -18,19 +29,26 @@ Este projeto detecta o rosto em tempo real, mede piscadas, monitora o tempo ativ
 - **NumPy**
 - **PIL/Pillow** (renderização de legendas)
 - **Winsound** (apenas no Windows, para o alerta sonoro)
+- **Chart.js + HTML/CSS/JS**
+- **FastAPI + Uvicorn**
 
 ---
 
 ## 📂 Estrutura do projeto
 ALERTABET/
 ├── src/
-│ ├── main.py # aplicação principal (UI, lógica de risco, alertas)
-│ ├── risk_model.py # regras de risco (tempo ativo, piscadas/minuto)
-│ ├── utils.py # funções auxiliares e interface gráfica
-│ ├── face_id.py # reconhecimento facial (opcional, LBPH)
-│ └── data/faces/ # dataset de rostos (para testes do face_id)
+│   ├── main.py          # Aplicação principal (câmera, lógica de risco, alertas)
+│   ├── risk_model.py    # Cálculo de risco e contadores (tempo e piscadas)
+│   ├── integration.py   # API local com FastAPI (envio de status e eventos)
+│   ├── utils.py         # Funções gráficas, métricas e renderização de painéis
+│   ├── face_id.py       # Módulo opcional de reconhecimento facial (LBPH)
+│   ├── www/
+│   │   ├── index.html   # Dashboard web interativo
+│   │   └── assets/...   # Scripts e estilos opcionais
+│   └── data/faces/      # Dataset de rostos (para testes com face_id)
 ├── requirements.txt
 └── README.md
+
 
 ---
 
@@ -51,7 +69,30 @@ pip install -r requirements.txt
 ## Execute a aplicação:
 python src/main.py
 
+## Dashboard web
+
+O dashboard web pode ser acessado em:
+http://127.0.0.1:8000/www/index.html
+
 ---
+## 📊 Dashboard Web
+O painel interativo exibe as métricas em tempo real:
+
+👁 Faces detectadas
+
+⏱ Tempo ativo (min)
+
+🔁 Blinks/min (taxa de piscadas)
+
+📈 Piscos (total acumulado)
+
+⚠️ Status de risco (com alerta visual)
+
+📊 Gráfico de alertas (últimas 24h)
+
+🕒 Histórico de eventos
+
+A comunicação entre main.py e o painel é feita via API FastAPI — os dados são enviados continuamente para /status e /events.
 
 ## 🎛️ Controles disponíveis
 A janela Controles contém sliders para ajustar parâmetros em tempo real:
@@ -114,3 +155,12 @@ Adicionar histórico de sessões (tempo total, pausas realizadas).
 Melhorar alertas (dashboard, relatórios, recomendações personalizadas).
 
 ---
+
+🧩 Autores
+
+FIAP | IoT & IOB
+Projeto desenvolvido por:
+
+Pedro Henrique Alves Guariente 
+David de Medeiros Pacheco Junior
+Orlando Akio Morii Cardoso
