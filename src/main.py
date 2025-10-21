@@ -1,5 +1,5 @@
 import os
-# Silenciar logs chatos do TF/MediaPipe (opcional)
+# Silenciar logs chatos do TF/MediaPipe
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["GLOG_minloglevel"] = "2"
 
@@ -18,6 +18,14 @@ from utils import (
 )
 from risk_model import RiskModel
 
+# >>> Integração (API local + eventos)
+from integration import (
+    run_in_thread as start_api,
+    update_status,
+    log_event,
+    set_reset_callback,
+)
+
 APP_WIN  = "Alerta Bet BR"
 CTRL_WIN = "Controles"
 
@@ -29,6 +37,9 @@ BEEP_INTERVAL_S  = 2.0     # intervalo entre beeps enquanto em risco (Windows)
 BEEP_FREQ_HZ     = 880
 BEEP_DUR_MS      = 150
 LEGEND_REFRESH_N = 60      # redesenhar legenda dos controles a cada N frames
+
+# ---- contadores em ESCOPO DE MÓDULO (para usar global no callback/tecla) ----
+blink_counter = 0
 
 # ---------- util: fixar janela como always-on-top (Windows) ----------
 def pin_window_top(window_title: str) -> None:
@@ -43,23 +54,35 @@ def pin_window_top(window_title: str) -> None:
 
 # ---------- webcam com fallback de APIs/índices ----------
 def open_camera() -> cv2.VideoCapture:
-    candidates = [
-        (0, cv2.CAP_MSMF),
-        (0, cv2.CAP_DSHOW),
-        (0, cv2.CAP_ANY),
-        (1, cv2.CAP_MSMF),
-        (1, cv2.CAP_DSHOW),
-        (1, cv2.CAP_ANY),
-    ]
+    """Tenta abrir a webcam priorizando DirectShow (Windows) e aceita override via env."""
+    preferred = os.getenv("ALERTABET_CAM_INDEX")   # ex: set ALERTABET_CAM_INDEX=0
+    try_indices = [int(preferred)] if preferred is not None else [0, 1, 2, 3]
+
+    candidates = []
+    # 1) DirectShow primeiro (costuma evitar o bug do MSMF)
+    for idx in try_indices:
+        candidates.append((idx, cv2.CAP_DSHOW))
+    # 2) Sem backend explícito
+    for idx in try_indices:
+        candidates.append((idx, 0))
+    # 3) Qualquer backend
+    for idx in try_indices:
+        candidates.append((idx, cv2.CAP_ANY))
+
     for idx, api in candidates:
-        cap = cv2.VideoCapture(idx, api)
+        cap = cv2.VideoCapture(idx, api) if api != 0 else cv2.VideoCapture(idx)
         if cap.isOpened():
-            print(f"[OK] Camera aberta: index={idx}, api={api}")
-            for _ in range(5):
-                cap.read(); cv2.waitKey(1)  # warm-up
-            return cap
-        cap.release(); print(f"[FAIL] index={idx}, api={api}")
-    raise RuntimeError("Nenhuma câmera pôde ser aberta. Feche apps que usam a webcam e verifique permissões.")
+            # testa leitura real (alguns “abrem” mas não entregam frames)
+            ok, _ = cap.read()
+            if ok:
+                print(f"[OK] Camera aberta: index={idx}, api={api}")
+                return cap
+            cap.release()
+        print(f"[FAIL] index={idx}, api={api}")
+    raise RuntimeError(
+        "Nenhuma câmera pôde ser aberta. "
+        "Feche apps que usam a webcam e verifique as permissões de câmera do Windows."
+    )
 
 # ---------- janelas e controles ----------
 cv2.namedWindow(APP_WIN)
@@ -85,18 +108,30 @@ RIGHT = [263,387,385,362,380,373]
 cap   = open_camera()
 model = RiskModel()  # defina warmup_s=5 no risk_model.py para testes mais rápidos
 
+# ---- Inicia API de integração (thread) ----
+start_api()  # http://127.0.0.1:8000
+
 help_on        = False
 last_beep_time = 0.0
 
 with mp_face.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_faces=1,
                       min_detection_confidence=0.5, min_tracking_confidence=0.5) as mesh:
 
-    blink_counter  = 0
+    # NÃO recrie blink_counter aqui!
     closed_start_t = None
     last_blink_t   = 0.0
     is_closed      = False
     fps_hist, ear_hist = [], []
     frame_count    = 0
+    prev_risky     = False  # para logar evento só na transição
+
+    # callback remoto (POST /reset) — usa 'global' em vez de nonlocal
+    def _reset_callback():
+        global blink_counter
+        blink_counter = 0
+        model.reset_counters()
+        log_event("reset", "api")
+    set_reset_callback(_reset_callback)
 
     while True:
         ok, frame = cap.read()
@@ -107,8 +142,7 @@ with mp_face.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_fa
 
         # --- parâmetros atuais dos sliders ---
         params = get_params(CTRL_WIN)
-        # >>> IMPORTANTE: atualiza via setter do modelo novo
-        model.set_risk_minutes(params["risk_minutes"])
+        model.set_risk_minutes(params["risk_minutes"])  # usar setter do modelo novo
         EAR_low  = params["EAR_thr"]
         EAR_high = EAR_low + 0.03  # histerese
 
@@ -151,20 +185,28 @@ with mp_face.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_fa
             ear = sum(ear_hist) / len(ear_hist)
 
             # piscos robustos
-            tnow = time.perf_counter()
-            if not is_closed and ear < EAR_low:
-                is_closed = True
-                closed_start_t = tnow
-            elif is_closed and ear > EAR_high:
-                closed_dur     = (tnow - (closed_start_t or tnow))
-                enough_duration = closed_dur >= CLOSED_MIN_S
-                enough_gap      = (tnow - last_blink_t) >= REFRACTORY_S
-                if enough_duration and enough_gap:
-                    blink_counter += 1
-                    last_blink_t   = tnow
-                    model.note_blink(tnow)
-                is_closed = False
-                closed_start_t = None
+        # --- piscos robustos (dentro do if res.multi_face_landmarks) ---
+        tnow = time.perf_counter()
+
+        # entrou no estado "olho fechado"
+        if not is_closed and ear < EAR_low:
+            is_closed = True
+            closed_start_t = tnow
+
+        # saiu do estado "fechado" e voltou a abrir
+        elif is_closed and ear > EAR_high:
+            closed_dur = (tnow - (closed_start_t or tnow))
+            enough_duration = closed_dur >= CLOSED_MIN_S   # 0.12s ~ 3-4 frames
+            enough_gap      = (tnow - last_blink_t) >= REFRACTORY_S  # 0.8s
+
+            if enough_duration and enough_gap:
+                blink_counter += 1
+                last_blink_t = tnow
+                model.note_blink(tnow)   # <<< MUITO IMPORTANTE
+
+            is_closed = False
+            closed_start_t = None
+
 
         # Desenha retângulo se Haar detectou (ajuda a estabilidade visual)
         if len(faces) > 0:
@@ -174,6 +216,21 @@ with mp_face.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_fa
 
         # ---- risco (passa se há rosto) ----
         risky, rate, mins = model.update(face_present=have_face)
+
+        # >>> Atualiza API /status
+        update_status(
+            have_face=bool(have_face),
+            faces=int(len(faces)),
+            ear=float(ear),
+            blink_rate=float(rate),
+            minutes_on=float(mins),
+            risky=bool(risky),
+        )
+
+        # >>> Evento quando entra em risco
+        if risky and not prev_risky:
+            log_event("risk", f"minutes_on={mins:.2f}; blink_rate={rate:.1f}")
+        prev_risky = risky
 
         # FPS
         fps = 1.0 / max(1e-6, time.perf_counter() - t0)
@@ -244,6 +301,7 @@ with mp_face.FaceMesh(static_image_mode=False, refine_landmarks=True, max_num_fa
         elif k in (ord('r'), ord('R')):
             blink_counter = 0
             model.reset_counters()
+            log_event("reset", "keyboard")
         elif k in (ord('s'), ord('S')):
             ts = time.strftime("%Y%m%d_%H%M%S")
             fn = f"frame_{ts}.png"

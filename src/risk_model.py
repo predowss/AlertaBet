@@ -65,15 +65,17 @@ class RiskModel:
         while self.blinks and (t - self.blinks[0]) > win:
             self.blinks.popleft()
 
-    def blink_rate_per_min(self, t: float | None = None) -> float:
-        """Retorna a taxa de piscos por minuto dentro da janela atual."""
+    def blink_rate_per_min(self, t=None):
         t = _now() if t is None else t
-        self._trim_blinks(t)
-        n = len(self.blinks)
-        if n < 2:
+        # mantém a janela deslizante
+        while self.blinks and t - self.blinks[0] > self.window_s:
+            self.blinks.popleft()
+
+        if len(self.blinks) < 2:
             return 0.0
-        span = max(1e-3, self.blinks[-1] - self.blinks[0])
-        return n / span * 60.0
+
+        span = max(1e-3, self.blinks[-1] - self.blinks[0])  # segundos
+        return len(self.blinks) / span * 60.0
 
     # -------- tempo --------
     def minutes_on(self) -> float:

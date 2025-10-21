@@ -4,3 +4,5 @@ opencv-contrib-python
 mediapipe
 numpy
 Pillow
+fastapi
+uvicorn[standard]

@@ -16,8 +16,14 @@ COL_DIM  = (180, 180, 180)
 def _overlay_alpha(dst, src, x, y, alpha=0.7):
     """Sobrepõe 'src' em 'dst' com alpha (BGR)."""
     h, w = src.shape[:2]
-    roi = dst[y:y+h, x:x+w]
-    cv2.addWeighted(src, alpha, roi, 1 - alpha, 0, roi)
+    # Proteção contra recorte fora da imagem
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(dst.shape[1], x + w), min(dst.shape[0], y + h)
+    if x0 >= x1 or y0 >= y1:
+        return
+    roi = dst[y0:y1, x0:x1]
+    src_crop = src[(y0 - y):(y0 - y) + (y1 - y0), (x0 - x):(x0 - x) + (x1 - x0)]
+    cv2.addWeighted(src_crop, alpha, roi, 1 - alpha, 0, roi)
 
 def panel(frame, x, y, w, h, alpha=0.65):
     box = np.full((h, w, 3), COL_BG, dtype=np.uint8)
@@ -126,16 +132,25 @@ def render_controls_legend(w=520, h=240):
     arr = np.array(img)[:, :, ::-1].copy()  # RGB->BGR
     return arr
 
-# ---- Alerta grande (Pillow, com acentos e dica no canto inferior direito) ----
+# -------- Helpers compatíveis com Pillow 10+ --------
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont):
+    """
+    Retorna (w, h) do texto usando textbbox quando disponível (Pillow >=10),
+    caindo para textsize em versões antigas.
+    """
+    if hasattr(draw, "textbbox"):
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+        return (right - left), (bottom - top)
+    # Pillow <10
+    return draw.textsize(text, font=font)
+
 def _wrap_text(draw, text, font, max_w):
     words = text.split()
     lines, cur = [], []
     for w in words:
         trial = " ".join(cur + [w])
-        bbox = draw.textbbox((0,0), trial, font=font)
-        w_px = bbox[2] - bbox[0]
-
-        if w_px <= max_w or not cur:
+        tw, _ = _text_size(draw, trial, font)
+        if tw <= max_w or not cur:
             cur.append(w)
         else:
             lines.append(" ".join(cur))
@@ -144,8 +159,9 @@ def _wrap_text(draw, text, font, max_w):
         lines.append(" ".join(cur))
     return lines
 
+# ---- Alerta grande (Pillow, com acentos e dica no canto inferior direito) ----
 def big_alert(frame,
-              title="RISCO — PAUSA AGORA",
+              title="RISCO - PAUSA AGORA",
               subtitle="Você está há muito tempo focado. Faça uma pausa e retome com clareza.",
               hint="Pressione R para resetar contadores",
               pulse=0.0):
@@ -183,15 +199,11 @@ def big_alert(frame,
     # Título
     title_size = max(28, int(W / 18))
     font_title = _pick_font(title_size, bold=True)
-    while draw.textsize(title, font=font_title)[0] > inner_w and title_size > 22:
-        title_size -= 2
-        font_title = _pick_font(title_size, bold=True)
-
-    font_sub  = _pick_font(max(20, int(W / 45)))
-    font_hint = _pick_font(18)
+    font_sub   = _pick_font(max(20, int(W / 45)))
+    font_hint  = _pick_font(18)
 
     # Centraliza título
-    tw, th = draw.textsize(title, font=font_title)
+    tw, th = _text_size(draw, title, font_title)
     tx = (W - tw) // 2
     ty = box_y + 24
     # sombra
@@ -203,12 +215,12 @@ def big_alert(frame,
     lines = _wrap_text(draw, subtitle, font_sub, inner_w)[:2]
     y = ty + th + 18
     for ln in lines:
-        lw, lh = draw.textsize(ln, font=font_sub)
+        lw, lh = _text_size(draw, ln, font_sub)
         draw.text(((W - lw) // 2, y), ln, fill=(255, 255, 255, 235), font=font_sub)
         y += lh + 6
 
     # Dica no canto inferior direito (dentro do banner)
-    hw, hh = draw.textsize(hint, font=font_hint)
+    hw, hh = _text_size(draw, hint, font_hint)
     hx = W - hw - 36
     hy = box_y + box_h - hh - 18
     draw.rounded_rectangle([hx - 10, hy - 6, hx + hw + 10, hy + hh + 6], 10, fill=(30, 30, 30, 200))
@@ -216,4 +228,4 @@ def big_alert(frame,
 
     # Composição e volta para BGR
     composed = Image.alpha_composite(base_img.convert("RGBA"), overlay).convert("RGB")
-    frame[:,:] = np.array(composed)[:, :, ::-1]
+    frame[:, :] = np.array(composed)[:, :, ::-1]
